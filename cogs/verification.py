@@ -8,6 +8,7 @@ import re
 from datetime import datetime, timedelta, timezone
 
 import anthropic
+import httpx2
 from PIL import Image
 
 import discord
@@ -31,7 +32,16 @@ TEMP_ROLE_ID      = 1511322290187665418  # 한달 뒤 자동 제거할 역할
 TEMP_ROLE_SECONDS = 30 * 24 * 3600      # 30일(초)
 TIMERS_FILE       = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'role_timers.json')
 
-_claude_client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+# Railway 등 일부 컨테이너 환경은 아웃바운드 IPv6 경로가 끊겨있는데 인터페이스는 있는 것처럼 보고돼
+# httpx가 IPv6로 먼저 시도하다 "Connection error."로 실패하는 경우가 있음 → IPv4 강제 + 타임아웃 여유 확보.
+_claude_http_client = httpx2.AsyncClient(
+    transport=httpx2.AsyncHTTPTransport(local_address="0.0.0.0"),
+    timeout=httpx2.Timeout(60.0, connect=20.0),
+)
+_claude_client = anthropic.AsyncAnthropic(
+    api_key=os.getenv("ANTHROPIC_API_KEY"),
+    http_client=_claude_http_client,
+)
 
 # ── 구독자 추적 / 쿨다운 ───────────────────────────────────────
 _SUBSCRIBER_FILE  = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'subscriber_registry.json')
@@ -345,8 +355,9 @@ async def _analyze_screenshot(img_bytes: bytes) -> dict:
                 return _parse_analysis(response.content[0].text)
             except Exception as e:
                 err_str = str(e)
-                if "429" in err_str or "rate_limit" in err_str or "529" in err_str or "overloaded" in err_str or "503" in err_str or "500" in err_str or "internal_server_error" in err_str:
-                    print(f"[폴백] {model} 일시적 오류 → 다음 모델 시도")
+                is_connection_err = isinstance(e, (anthropic.APIConnectionError, anthropic.APITimeoutError))
+                if is_connection_err or "429" in err_str or "rate_limit" in err_str or "529" in err_str or "overloaded" in err_str or "503" in err_str or "500" in err_str or "internal_server_error" in err_str:
+                    print(f"[폴백] {model} 일시적 오류({type(e).__name__}) → 다음 모델 시도")
                     last_err = e
                     # API가 알려주는 실제 재시도 대기시간(retry-after)이 있으면 그걸 우선 사용
                     m = re.search(r"retry-after['\"]?\s*[:=]\s*['\"]?(\d+(?:\.\d+)?)", err_str, re.IGNORECASE)
@@ -788,7 +799,7 @@ class Verification(commands.Cog):
             print(f"[AI 분석 완료] {analysis}")
         except Exception as e:
             err_str = str(e)
-            print(f"[오류] 이미지 분석 실패: {e}")
+            print(f"[오류] 이미지 분석 실패: {type(e).__name__}: {e} | cause={e.__cause__!r}")
             if "429" in err_str or "rate_limit" in err_str:
                 await status_msg.edit(content="⏰ AI 분석 서비스가 일시적으로 한도에 도달했어요.\n**잠시 후 다시 시도해주세요!** (이미지가 올바른 경우 재업로드하시면 됩니다)")
             elif "529" in err_str or "overloaded" in err_str or "503" in err_str or "500" in err_str:
