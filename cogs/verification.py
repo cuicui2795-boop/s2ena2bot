@@ -752,6 +752,14 @@ class Verification(commands.Cog):
             return
         self._processing_msg_ids.add(message.id)
 
+        # 이미 인증된 사용자면 재분석 없이 스킵 (짧은 시간 내 중복 업로드로 인한 중복 승인 메시지 방지)
+        verified_role = message.guild.get_role(VERIFIED_ROLE_ID) if VERIFIED_ROLE_ID else None
+        if verified_role and verified_role in message.author.roles:
+            print(f"[스킵] 이미 인증된 사용자 | {message.author}")
+            await message.reply("✅ 이미 인증되어 있습니다!", mention_author=False, delete_after=10)
+            self._processing_msg_ids.discard(message.id)
+            return
+
         # ── 쿨다운 체크 (거절 후 60초 대기) ──────────────────────────
         now_ts = datetime.now(timezone.utc).timestamp()
         last_rejected = _user_cooldowns.get(message.author.id, 0)
