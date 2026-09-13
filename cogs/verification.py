@@ -452,21 +452,22 @@ class Verification(commands.Cog):
 
         print(f"[시작 검사] 미처리 메시지 확인 중...")
 
+        # 5일 이내만 대상 (Discord 첨부 URL 만료 대비) — 개수 제한 없이 시간 기준으로 조회해야
+        # 채널이 활발해 2000개 넘게 쌓여도 오래된 미처리 메시지를 놓치지 않는다.
+        now_utc = datetime.now(timezone.utc)
+        since = now_utc - timedelta(minutes=7200)
+
         # 봇이 이미 답한 메시지 ID 수집
         replied_to = set()
-        async for msg in channel.history(limit=2000):
+        async for msg in channel.history(limit=None, after=since):
             if msg.author == self.bot.user and msg.reference:
                 replied_to.add(msg.reference.message_id)
 
-        # 이미지가 있고 아직 처리 안 된 메시지 처리 (5일 이내만 — Discord 첨부 URL 만료 대비)
-        now_utc = datetime.now(timezone.utc)
+        # 이미지가 있고 아직 처리 안 된 메시지 처리
         pending = []
-        async for msg in channel.history(limit=2000):
+        async for msg in channel.history(limit=None, after=since):
             if msg.author.bot:
                 continue
-            age_minutes = (now_utc - msg.created_at).total_seconds() / 60
-            if age_minutes > 7200:
-                continue  # 5일 초과 메시지는 이미지 URL 만료 가능성 있어 스킵
             images = [a for a in msg.attachments if (a.content_type or "").startswith("image/")]
             if images and msg.id not in replied_to:
                 pending.append(msg)
@@ -1096,6 +1097,22 @@ class Verification(commands.Cog):
         deleted = await ctx.channel.purge(limit=개수, check=lambda m: not m.pinned)
         await ctx.send(f"🗑️ 메시지 {len(deleted)}개 삭제 완료.", delete_after=5)
         print(f"[청소] {ctx.author}가 메시지 {len(deleted)}개 삭제")
+
+    @commands.command(name="정리")
+    @commands.has_permissions(manage_messages=True)
+    async def cmd_clear_keep_status(self, ctx: commands.Context, 개수: int = 1000):
+        """인증완료(✅)/대기중(⏰) 메시지는 남기고 나머지만 삭제: !정리 [개수]"""
+        def should_delete(m):
+            if m.pinned:
+                return False
+            content = m.content or ""
+            if content.startswith("✅") or content.startswith("⏰"):
+                return False
+            return True
+
+        deleted = await ctx.channel.purge(limit=개수, check=should_delete)
+        await ctx.send(f"🗑️ 메시지 {len(deleted)}개 삭제 완료 (✅/⏰ 메시지는 유지).", delete_after=5)
+        print(f"[정리] {ctx.author}가 메시지 {len(deleted)}개 삭제 (✅/⏰ 제외)")
 
     @commands.command(name="사진지우기")
     @commands.has_permissions(manage_messages=True)
