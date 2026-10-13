@@ -4,3 +4,7 @@ __pycache__/
 *.pyc
 *.log
 .bot.pid
+role_timers.json
+subscriber_registry.json
+seen_hashes.json
+seen_phashes.json
